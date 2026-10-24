@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: disaster-monitoring-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 30
+    envVars:
+      - key: INGEST_API_KEY
+        sync: false
+      - key: SENSOR_REFERENCE_DISTANCE_CM
+        sync: false
