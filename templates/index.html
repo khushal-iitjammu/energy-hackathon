@@ -92,6 +92,38 @@ let rainElapsedMs=0;
 let rainWasDetected=false;
 let rainTimer=null;
 
+// Smooth noisy readings with a 5-sample moving average and require 3
+// consecutive averaged classifications before changing the displayed alert.
+const RATE_WINDOW=5;
+const ALERT_CONFIRM_SAMPLES=3;
+const LOW_RATE_THRESHOLD=0.008;   // cm/s; same thresholds used by demo mode
+const HIGH_RATE_THRESHOLD=0.033;  // cm/s
+let rateSamples=[];
+let alertCandidate="NORMAL";
+let alertCandidateCount=0;
+let stableAlert="NORMAL";
+
+function averageRate(rate){
+  if(rate===null || rate===undefined || rate==="" || !Number.isFinite(Number(rate))) return null;
+  rateSamples.push(Number(rate));
+  if(rateSamples.length>RATE_WINDOW) rateSamples.shift();
+  return rateSamples.reduce((sum,value)=>sum+value,0)/rateSamples.length;
+}
+function classifySmoothedAlert(avgRate, fallbackAlert){
+  if(avgRate===null) return (fallbackAlert||"WAITING").toUpperCase();
+  // Flood-risk alerts are based on a sustained positive water-level rise.
+  const proposed=avgRate>=HIGH_RATE_THRESHOLD?"HIGH":
+                 avgRate>=LOW_RATE_THRESHOLD?"LOW":"NORMAL";
+  if(proposed===alertCandidate){
+    alertCandidateCount++;
+  }else{
+    alertCandidate=proposed;
+    alertCandidateCount=1;
+  }
+  if(alertCandidateCount>=ALERT_CONFIRM_SAMPLES) stableAlert=alertCandidate;
+  return stableAlert;
+}
+
 function isRainDetected(value){
   // This dashboard treats digital output 1 as rain detected.
   return value !== null && value !== undefined && value !== "" && Number(value) === 1;
@@ -154,24 +186,27 @@ function addAlert(message,time){
 }
 function render(d,rows=[]){
   el("distance").textContent=fmt(d.ultrasonic_distance_cm)+" cm";
-  el("rate").textContent=fmt(d.rate_cm_min)+" cm/min";
+  const avgRate=averageRate(d.rate_cm_s);
+  const displayedRate=avgRate===null?d.rate_cm_min:avgRate*60;
+  el("rate").textContent=fmt(displayedRate)+" cm/min";
   el("moisture").textContent=fmt(d.soil_moisture_percent,1)+"%";
   el("rain").textContent=d.rain_digital_output==null?"--":(Number(d.rain_digital_output)===1?"DETECTED":"NO RAIN");
   updateRainTimerFromReading(d.rain_digital_output);
   el("buzzer").textContent=d.buzzer_digital_status==null?"--":(Number(d.buzzer_digital_status)===1?"ACTIVE":"OFF");
   el("updated").textContent=d.received_at||"--";
-  const rate=d.rate_cm_s;
-  el("direction").textContent=rate==null?"Waiting for readings":rate>0.001?"Water level rising":rate< -0.001?"Water level falling":"Relatively stable";
+  const rate=avgRate;
+  el("direction").textContent=rate==null?"Waiting for readings":rate>0.001?"Average trend: water level rising":rate< -0.001?"Average trend: water level falling":"Average trend: relatively stable";
   const status=el("status");
   status.className="badge";
   if(demoMode){status.classList.add("demo");status.textContent="● DEMO MODE";}
   else if(d.connected){status.classList.add("online");status.textContent="● LIVE DATA";}
   else{status.classList.add("offline");status.textContent="● RECEIVER OFFLINE";}
-  const alert=(d.alert||"WAITING").toUpperCase(), box=el("alert");
+  const alert=classifySmoothedAlert(avgRate,d.alert), box=el("alert");
   box.className=alert.toLowerCase();
-  const labels={NORMAL:"Normal / no rapid rise detected",LOW:"LOW ALERT — water level rising",HIGH:"HIGH ALERT — rapid rise detected",WAITING:"Waiting for sensor data"};
-  box.textContent=(labels[alert]||alert)+": "+(d.message||"No sensor message");
-  if(alert==="LOW"||alert==="HIGH")addAlert(alert+": "+(d.message||""),d.received_at);
+  const labels={NORMAL:"Normal / no sustained rapid rise detected",LOW:"LOW ALERT — sustained water-level rise",HIGH:"HIGH ALERT — sustained rapid water-level rise",WAITING:"Waiting for sensor data"};
+  const rateNote=avgRate===null?"Rate unavailable":"5-reading average: "+fmt(avgRate*60)+" cm/min";
+  box.textContent=(labels[alert]||alert)+". "+rateNote+". Alerts change only after "+ALERT_CONFIRM_SAMPLES+" consecutive averaged readings.";
+  if(alert==="LOW"||alert==="HIGH")addAlert(alert+": "+rateNote,d.received_at);
   const recent=rows.slice(-MAX);
   for(const key of Object.keys(charts))charts[key].data.labels=recent.map((r,i)=>i+1);
   charts.distance.data.datasets[0].data=recent.map(r=>r.ultrasonic_distance_cm);
