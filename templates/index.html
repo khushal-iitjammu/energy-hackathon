@@ -44,6 +44,7 @@ button.secondary{background:#334155}
   <div class="card"><p class="muted">Rate of Change</p><div class="value" id="rate">-- cm/min</div><p class="muted" id="direction">Waiting for readings</p></div>
   <div class="card"><p class="muted">Soil Moisture</p><div class="value" id="moisture">--%</div><p class="muted">Reported sensor percentage</p></div>
   <div class="card"><p class="muted">Rain Detection</p><div class="value" id="rain">--</div><p class="muted">Current sensor status</p></div>
+  <div class="card"><p class="muted">Rain Duration (Current Event)</p><div class="value" id="rainDuration">00:00:00</div><p class="muted" id="rainDurationNote">Waiting for rain detection</p></div>
 </section>
 
 <h2>📊 Live Sensor Analytics</h2>
@@ -77,10 +78,56 @@ button.secondary{background:#334155}
   </div>
 </div>
 
+<p class="muted">Live dashboard when connected to the backend. Demo mode is available for interface preview only. Alert thresholds must be validated before operational use; this is not a certified life-safety system.</p>
+
 <script>
 const MAX=20;
 let demoMode=new URLSearchParams(location.search).get("demo")==="1";
 let demoTimer=null, demoDistance=40, demoPacket=0, alertLog=[], lastAlert="";
+
+// Rain duration is measured in this browser session from the first detected-rain reading.
+// The timer pauses/resets when the sensor reports no rain.
+let rainStartedAt=null;
+let rainElapsedMs=0;
+let rainWasDetected=false;
+let rainTimer=null;
+
+function isRainDetected(value){
+  // This dashboard treats digital output 1 as rain detected.
+  return value !== null && value !== undefined && value !== "" && Number(value) === 1;
+}
+function formatDuration(ms){
+  const totalSeconds=Math.floor(Math.max(0,ms)/1000);
+  const hours=String(Math.floor(totalSeconds/3600)).padStart(2,"0");
+  const minutes=String(Math.floor((totalSeconds%3600)/60)).padStart(2,"0");
+  const seconds=String(totalSeconds%60).padStart(2,"0");
+  return `${hours}:${minutes}:${seconds}`;
+}
+function updateRainDuration(){
+  const elapsed=rainElapsedMs+(rainStartedAt===null?0:Date.now()-rainStartedAt);
+  el("rainDuration").textContent=formatDuration(elapsed);
+  el("rainDurationNote").textContent=rainWasDetected
+    ? "RAIN DETECTED — timer running"
+    : rainElapsedMs>0 ? "Rain stopped — last event duration" : "Waiting for rain detection";
+}
+function updateRainTimerFromReading(value){
+  // Ignore missing readings so a brief data gap does not falsely stop the timer.
+  if(value===null || value===undefined || value===""){
+    updateRainDuration();
+    return;
+  }
+  const detected=isRainDetected(value);
+  if(detected && !rainWasDetected){
+    rainElapsedMs=0;
+    rainStartedAt=Date.now();
+    rainWasDetected=true;
+  } else if(!detected && rainWasDetected){
+    rainElapsedMs+=rainStartedAt===null?0:Date.now()-rainStartedAt;
+    rainStartedAt=null;
+    rainWasDetected=false;
+  }
+  updateRainDuration();
+}
 const charts={};
 function createChart(id,label,color,type="line",yMin,yMax){
   return new Chart(document.getElementById(id),{
@@ -110,6 +157,7 @@ function render(d,rows=[]){
   el("rate").textContent=fmt(d.rate_cm_min)+" cm/min";
   el("moisture").textContent=fmt(d.soil_moisture_percent,1)+"%";
   el("rain").textContent=d.rain_digital_output==null?"--":(Number(d.rain_digital_output)===1?"DETECTED":"NO RAIN");
+  updateRainTimerFromReading(d.rain_digital_output);
   el("buzzer").textContent=d.buzzer_digital_status==null?"--":(Number(d.buzzer_digital_status)===1?"ACTIVE":"OFF");
   el("updated").textContent=d.received_at||"--";
   const rate=d.rate_cm_s;
@@ -168,6 +216,7 @@ function demo(){
 }
 if(demoMode){demo();setInterval(demo,2000);}
 else{refreshDashboard();setInterval(refreshDashboard,2000);}
+rainTimer=setInterval(updateRainDuration,1000);
 </script>
 </body>
 </html>
