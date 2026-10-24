@@ -126,3 +126,5 @@ def main():
             logging.error("Check the COM port and close Serial Monitor. Retrying in 4 seconds.")
             time.sleep(4)
         except KeyboardInterrupt:
+            logging.info("Stopped.")
+            break
