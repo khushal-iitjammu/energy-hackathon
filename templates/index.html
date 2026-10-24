@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Disaster Monitoring Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:25px;background:#0b1120;color:#e2e8f0;font-family:Arial,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+h1{color:#38bdf8}h2{font-size:18px}
+.badge{background:#263449;color:#cbd5e1;padding:10px 14px;border-radius:20px}
+.badge.demo{background:#164e3b;color:#86efac}
+.badge.offline{background:#4b2630;color:#fda4af}
+.badge.online{background:#164e3b;color:#86efac}
+.cards,.charts{display:grid;gap:16px;margin:22px 0;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.card,.panel{background:#151f32;padding:20px;border:1px solid #29364b;border-radius:12px;min-width:0}
+.value{font-size:28px;font-weight:bold;color:#38bdf8;margin-bottom:5px;overflow-wrap:anywhere}
+.muted{color:#94a3b8;font-size:13px}
+.chart{height:260px;position:relative}
+.lower{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+#alert{padding:13px;border-radius:8px;background:#263449;line-height:1.6;overflow-wrap:anywhere}
+#alert.normal{border-left:4px solid #4ade80}#alert.low{border-left:4px solid #facc15}#alert.high{border-left:4px solid #fb7185}
+table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13px}
+th,td{text-align:left;padding:12px;border-bottom:1px solid #29364b}
+th{color:#38bdf8}.table-wrap{overflow-x:auto}
+button{padding:10px 16px;border:0;border-radius:7px;cursor:pointer;background:#0284c7;color:white;margin:5px 5px 5px 0}
+button.secondary{background:#334155}
+@media(max-width:700px){body{padding:14px}.lower{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🌍 Disaster Monitoring System</h1>
+    <p class="muted">Environmental Monitoring &amp; Early Warning Dashboard</p>
+  </div>
+  <span class="badge" id="status">● CONNECTING</span>
+</header>
+
+<section class="cards">
+  <div class="card"><p class="muted">Ultrasonic Distance</p><div class="value" id="distance">-- cm</div><p class="muted">Distance to measured surface</p></div>
+  <div class="card"><p class="muted">Rate of Change</p><div class="value" id="rate">-- cm/min</div><p class="muted" id="direction">Waiting for readings</p></div>
+  <div class="card"><p class="muted">Soil Moisture</p><div class="value" id="moisture">--%</div><p class="muted">Reported sensor percentage</p></div>
+  <div class="card"><p class="muted">Rain Detection</p><div class="value" id="rain">--</div><p class="muted">Current sensor status</p></div>
+</section>
+
+<h2>📊 Live Sensor Analytics</h2>
+<section class="charts">
+  <div class="panel"><h2>Water Distance Trend</h2><div class="chart"><canvas id="distanceChart"></canvas></div></div>
+  <div class="panel"><h2>Rate of Change Trend</h2><div class="chart"><canvas id="rateChart"></canvas></div></div>
+  <div class="panel"><h2>Soil Moisture Trend</h2><div class="chart"><canvas id="moistureChart"></canvas></div></div>
+  <div class="panel"><h2>Rain Detection History</h2><div class="chart"><canvas id="rainChart"></canvas></div></div>
+</section>
+
+<section class="lower">
+  <div class="panel">
+    <h2>🚨 Current Alerts</h2>
+    <div id="alert" class="normal">Waiting for sensor data...</div>
+    <p>Buzzer: <strong id="buzzer">--</strong></p>
+    <p class="muted">Last update: <span id="updated">--</span></p>
+  </div>
+  <div class="panel">
+    <h2>⚠️ Alert History</h2>
+    <div id="history" class="muted">No alerts recorded.</div>
+  </div>
+</section>
+
+<div class="panel" style="margin-top:20px">
+  <h2>Recent Sensor Readings</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Distance</th><th>Rate</th><th>Moisture</th><th>Rain</th><th>Buzzer</th></tr></thead>
+      <tbody id="readings"><tr><td colspan="6">Waiting for readings...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<p class="muted">Live dashboard when connected to the backend. Demo mode is available for interface preview only. Alert thresholds must be validated before operational use; this is not a certified life-safety system.</p>
+
+<script>
+const MAX=20;
+let demoMode=new URLSearchParams(location.search).get("demo")==="1";
+let demoTimer=null, demoDistance=40, demoPacket=0, alertLog=[], lastAlert="";
+const charts={};
+function createChart(id,label,color,type="line",yMin,yMax){
+  return new Chart(document.getElementById(id),{
+    type,
+    data:{labels:[],datasets:[{label,data:[],borderColor:color,backgroundColor:type==="bar"?color:color+"33",tension:.3,pointRadius:2,fill:type==="line"}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      scales:{x:{ticks:{color:"#94a3b8",maxTicksLimit:6},grid:{color:"#29364b"}},
+      y:{...(yMin!==undefined?{min:yMin}:{}),...(yMax!==undefined?{max:yMax}:{}),ticks:{color:"#94a3b8"},grid:{color:"#29364b"}}},
+      plugins:{legend:{labels:{color:"#e2e8f0"}}}}
+  });
+}
+charts.distance=createChart("distanceChart","Distance (cm)","#38bdf8");
+charts.rate=createChart("rateChart","Rate (cm/min)","#fb923c");
+charts.moisture=createChart("moistureChart","Moisture (%)","#4ade80");
+charts.rain=createChart("rainChart","Rain detected (1 = yes)","#818cf8","bar",0,1);
+const el=id=>document.getElementById(id);
+const fmt=(v,n=2)=>v===null||v===undefined||v===""||!Number.isFinite(Number(v))?"--":Number(v).toFixed(n);
+function addAlert(message,time){
+  const entry=(time||new Date().toLocaleTimeString())+" — "+message;
+  if(alertLog[0]===entry)return;
+  alertLog.unshift(entry);alertLog=alertLog.slice(0,8);
+  el("history").replaceChildren();
+  alertLog.forEach(t=>{const p=document.createElement("p");p.textContent=t;el("history").appendChild(p);});
+}
+function render(d,rows=[]){
+  el("distance").textContent=fmt(d.ultrasonic_distance_cm)+" cm";
+  el("rate").textContent=fmt(d.rate_cm_min)+" cm/min";
+  el("moisture").textContent=fmt(d.soil_moisture_percent,1)+"%";
+  el("rain").textContent=d.rain_digital_output==null?"--":(Number(d.rain_digital_output)===1?"DETECTED":"NO RAIN");
+  el("buzzer").textContent=d.buzzer_digital_status==null?"--":(Number(d.buzzer_digital_status)===1?"ACTIVE":"OFF");
+  el("updated").textContent=d.received_at||"--";
+  const rate=d.rate_cm_s;
+  el("direction").textContent=rate==null?"Waiting for readings":rate>0.001?"Water level rising":rate< -0.001?"Water level falling":"Relatively stable";
+  const status=el("status");
+  status.className="badge";
+  if(demoMode){status.classList.add("demo");status.textContent="● DEMO MODE";}
+  else if(d.connected){status.classList.add("online");status.textContent="● LIVE DATA";}
+  else{status.classList.add("offline");status.textContent="● RECEIVER OFFLINE";}
+  const alert=(d.alert||"WAITING").toUpperCase(), box=el("alert");
+  box.className=alert.toLowerCase();
+  const labels={NORMAL:"Normal / no rapid rise detected",LOW:"LOW ALERT — water level rising",HIGH:"HIGH ALERT — rapid rise detected",WAITING:"Waiting for sensor data"};
+  box.textContent=(labels[alert]||alert)+": "+(d.message||"No sensor message");
+  if(alert==="LOW"||alert==="HIGH")addAlert(alert+": "+(d.message||""),d.received_at);
+  const recent=rows.slice(-MAX);
+  for(const key of Object.keys(charts))charts[key].data.labels=recent.map((r,i)=>i+1);
+  charts.distance.data.datasets[0].data=recent.map(r=>r.ultrasonic_distance_cm);
+  charts.rate.data.datasets[0].data=recent.map(r=>r.rate_cm_min);
+  charts.moisture.data.datasets[0].data=recent.map(r=>r.soil_moisture_percent);
+  charts.rain.data.datasets[0].data=recent.map(r=>r.rain_digital_output==null?null:Number(r.rain_digital_output));
+  Object.values(charts).forEach(c=>c.update("none"));
+  const table=el("readings");table.replaceChildren();
+  rows.slice(-10).reverse().forEach(r=>{
+    const tr=document.createElement("tr");
+    const vals=[r.received_at||"--",r.ultrasonic_distance_cm==null?"No echo":fmt(r.ultrasonic_distance_cm)+" cm",
+      r.rate_cm_min==null?"--":fmt(r.rate_cm_min)+" cm/min",
+      r.soil_moisture_percent==null?"--":fmt(r.soil_moisture_percent,1)+"%",
+      r.rain_digital_output==null?"--":Number(r.rain_digital_output)===1?"Yes":"No",
+      r.buzzer_digital_status==null?"--":Number(r.buzzer_digital_status)===1?"Active":"Off"];
+    vals.forEach(v=>{const td=document.createElement("td");td.textContent=v;tr.appendChild(td);});table.appendChild(tr);
+  });
+  if(!rows.length)table.innerHTML='<tr><td colspan="6">Waiting for readings...</td></tr>';
+}
+async function refreshDashboard(){
+  if(demoMode){demo();return;}
+  try{
+    const [lr,hr]=await Promise.all([fetch("/api/latest",{cache:"no-store"}),fetch("/api/history",{cache:"no-store"})]);
+    if(!lr.ok||!hr.ok)throw new Error("API error");
+    render(await lr.json(),await hr.json());
+  }catch(e){
+    el("status").className="badge offline";el("status").textContent="● SERVER UNAVAILABLE";
+    el("alert").textContent="Cannot reach the dashboard API. Check the hosted service.";
+  }
+}
+function demo(){
+  demoPacket++;demoDistance=Math.max(10,Math.min(100,demoDistance+(Math.random()*2-1)));
+  const rate=+(Math.random()*0.06-0.01).toFixed(4);
+  const alert=rate>=0.033?"HIGH":rate>=0.008?"LOW":"NORMAL";
+  const now=new Date().toLocaleTimeString();
+  const d={connected:true,received_at:now,packet_number:demoPacket,ultrasonic_distance_cm:+demoDistance.toFixed(2),
+    rate_cm_s:rate,rate_cm_min:+(rate*60).toFixed(2),soil_moisture_percent:Math.floor(35+Math.random()*50),
+    rain_digital_output:Math.random()>.8?1:0,buzzer_digital_status:alert==="HIGH"?1:0,alert,message:"Simulated data for interface preview"};
+  const rows=Array.from({length:Math.min(demoPacket,MAX)},(_,i)=>({...d,received_at:new Date(Date.now()-(Math.min(demoPacket,MAX)-i-1)*2000).toLocaleTimeString(),
+    ultrasonic_distance_cm:Math.max(10,Math.min(100,demoDistance+(Math.random()*4-2))),rate_cm_min:+(rate*60).toFixed(2)}));
+  render(d,rows);
+}
+if(demoMode){demo();setInterval(demo,2000);}
+else{refreshDashboard();setInterval(refreshDashboard,2000);}
+</script>
+</body>
+</html>
