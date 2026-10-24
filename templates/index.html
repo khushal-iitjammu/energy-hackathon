@@ -22,6 +22,9 @@ h1{color:#38bdf8}h2{font-size:18px}
 .lower{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 #alert{padding:13px;border-radius:8px;background:#263449;line-height:1.6;overflow-wrap:anywhere}
 #alert.normal{border-left:4px solid #4ade80}#alert.low{border-left:4px solid #facc15}#alert.high{border-left:4px solid #fb7185}
+#earthquakeStatus.alert-state{color:#fb7185}
+#earthquakeStatus.normal-state{color:#4ade80}
+#earthquakeStatus.waiting-state{color:#facc15}
 table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13px}
 th,td{text-align:left;padding:12px;border-bottom:1px solid #29364b}
 th{color:#38bdf8}.table-wrap{overflow-x:auto}
@@ -45,6 +48,8 @@ button.secondary{background:#334155}
   <div class="card"><p class="muted">Soil Moisture</p><div class="value" id="moisture">--%</div><p class="muted">Reported sensor percentage</p></div>
   <div class="card"><p class="muted">Rain Detection</p><div class="value" id="rain">--</div><p class="muted">Current sensor status</p></div>
   <div class="card"><p class="muted">Rain Duration (Current Event)</p><div class="value" id="rainDuration">00:00:00</div><p class="muted" id="rainDurationNote">Waiting for rain detection</p></div>
+  <div class="card"><p class="muted">MPU6050 Shaking Status</p><div class="value" id="earthquakeStatus">WAITING</div><p class="muted" id="earthquakeNote">Waiting for MPU6050 data</p></div>
+  <div class="card"><p class="muted">Vibration Magnitude</p><div class="value" id="vibration">-- m/s²</div><p class="muted" id="vibrationG">-- g dynamic acceleration</p></div>
 </section>
 
 <h2>📊 Live Sensor Analytics</h2>
@@ -53,6 +58,7 @@ button.secondary{background:#334155}
   <div class="panel"><h2>Rate of Change Trend</h2><div class="chart"><canvas id="rateChart"></canvas></div></div>
   <div class="panel"><h2>Soil Moisture Trend</h2><div class="chart"><canvas id="moistureChart"></canvas></div></div>
   <div class="panel"><h2>Rain Detection History</h2><div class="chart"><canvas id="rainChart"></canvas></div></div>
+  <div class="panel"><h2>MPU6050 Vibration Trend</h2><div class="chart"><canvas id="vibrationChart"></canvas></div></div>
 </section>
 
 <section class="lower">
@@ -176,6 +182,7 @@ charts.distance=createChart("distanceChart","Distance (cm)","#38bdf8");
 charts.rate=createChart("rateChart","Rate (cm/sec)","#fb923c");
 charts.moisture=createChart("moistureChart","Moisture (%)","#4ade80","line",0,100);
 charts.rain=createChart("rainChart","Rain detected (1 = yes)","#818cf8","bar",0,1);
+charts.vibration=createChart("vibrationChart","Dynamic acceleration (m/s²)","#f472b6");
 const el=id=>document.getElementById(id);
 const fmt=(v,n=2)=>v===null||v===undefined||v===""||!Number.isFinite(Number(v))?"--":Number(v).toFixed(n);
 function addAlert(message,time){
@@ -194,6 +201,21 @@ function render(d,rows=[]){
   el("rain").textContent=d.rain_digital_output==null?"--":(Number(d.rain_digital_output)===1?"DETECTED":"NO RAIN");
   updateRainTimerFromReading(d.rain_digital_output);
   el("buzzer").textContent=d.buzzer_digital_status==null?"--":(Number(d.buzzer_digital_status)===1?"ACTIVE":"OFF");
+
+  // MPU6050 fields are supplied by the updated Flask /api/latest endpoint.
+  const mpuValid=d.mpu_valid===true || Number(d.mpu_valid)===1;
+  const quake=Boolean(d.earthquake_detected===true || Number(d.earthquake_detected)===1);
+  const quakeStatus=d.earthquake_status || (mpuValid ? (quake?"VIBRATION_ALERT":"NORMAL") : "MPU6050_UNAVAILABLE");
+  const quakeEl=el("earthquakeStatus");
+  quakeEl.textContent=quakeStatus.replaceAll("_"," ");
+  quakeEl.className=quake ? "value alert-state" : (mpuValid ? "value normal-state" : "value waiting-state");
+  el("earthquakeNote").textContent=mpuValid
+    ? (quake ? "Possible strong shaking detected — verify locally" : "MPU6050 data received")
+    : "MPU6050 data unavailable";
+  el("vibration").textContent=d.vibration_m_s2==null ? "-- m/s²" : fmt(d.vibration_m_s2,3)+" m/s²";
+  el("vibrationG").textContent=d.vibration_g==null ? "-- g dynamic acceleration" : fmt(d.vibration_g,3)+" g dynamic acceleration";
+
+  if(quake) addAlert("MPU6050: possible strong shaking detected",d.received_at);
   el("updated").textContent=d.received_at||"--";
   const rate=avgRate;
   el("direction").textContent=rate==null?"Waiting for readings":rate>0.001?"Average trend: water level rising":rate< -0.001?"Average trend: water level falling":"Average trend: relatively stable";
@@ -214,6 +236,7 @@ function render(d,rows=[]){
   charts.rate.data.datasets[0].data=recent.map(r=>r.rate_cm_s ?? (r.rate_cm_min==null?null:Number(r.rate_cm_min)/60));
   charts.moisture.data.datasets[0].data=recent.map(r=>r.soil_moisture_percent);
   charts.rain.data.datasets[0].data=recent.map(r=>r.rain_digital_output==null?null:Number(r.rain_digital_output));
+  charts.vibration.data.datasets[0].data=recent.map(r=>r.vibration_m_s2==null?null:Number(r.vibration_m_s2));
   Object.values(charts).forEach(c=>c.update("none"));
   const table=el("readings");table.replaceChildren();
   rows.slice(-10).reverse().forEach(r=>{
@@ -243,9 +266,15 @@ function demo(){
   const rate=+(Math.random()*0.06-0.01).toFixed(4);
   const alert=rate>=0.033?"HIGH":rate>=0.008?"LOW":"NORMAL";
   const now=new Date().toLocaleTimeString();
+  const vibration=+(Math.random()*1.4).toFixed(3);
+  const quake=vibration>=1.0 && Math.random()>.65;
   const d={connected:true,received_at:now,packet_number:demoPacket,ultrasonic_distance_cm:+demoDistance.toFixed(2),
     rate_cm_s:rate,rate_cm_min:+(rate*60).toFixed(2),soil_moisture_percent:Math.floor(35+Math.random()*50),
-    rain_digital_output:Math.random()>.8?1:0,buzzer_digital_status:alert==="HIGH"?1:0,alert,message:"Simulated data for interface preview"};
+    rain_digital_output:Math.random()>.8?1:0,buzzer_digital_status:alert==="HIGH"?1:0,
+    mpu_valid:true,accel_x:0.1,accel_y:0.05,accel_z:9.80665+vibration,
+    vibration_m_s2:vibration,vibration_g:+(vibration/9.80665).toFixed(3),
+    earthquake_detected:quake,earthquake_status:quake?"VIBRATION_ALERT":"NORMAL",
+    alert,message:"Simulated data for interface preview"};
   const rows=Array.from({length:Math.min(demoPacket,MAX)},(_,i)=>({...d,received_at:new Date(Date.now()-(Math.min(demoPacket,MAX)-i-1)*2000).toLocaleTimeString(),
     ultrasonic_distance_cm:Math.max(10,Math.min(100,demoDistance+(Math.random()*4-2))),rate_cm_min:+(rate*60).toFixed(2)}));
   render(d,rows);
