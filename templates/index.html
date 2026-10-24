@@ -41,7 +41,7 @@ button.secondary{background:#334155}
 
 <section class="cards">
   <div class="card"><p class="muted">Ultrasonic Distance</p><div class="value" id="distance">-- cm</div><p class="muted">Distance to measured surface</p></div>
-  <div class="card"><p class="muted">Rate of Change</p><div class="value" id="rate">-- cm/min</div><p class="muted" id="direction">Waiting for readings</p></div>
+  <div class="card"><p class="muted">Rate of Change</p><div class="value" id="rate">-- cm/sec</div><p class="muted" id="direction">Waiting for readings</p></div>
   <div class="card"><p class="muted">Soil Moisture</p><div class="value" id="moisture">--%</div><p class="muted">Reported sensor percentage</p></div>
   <div class="card"><p class="muted">Rain Detection</p><div class="value" id="rain">--</div><p class="muted">Current sensor status</p></div>
   <div class="card"><p class="muted">Rain Duration (Current Event)</p><div class="value" id="rainDuration">00:00:00</div><p class="muted" id="rainDurationNote">Waiting for rain detection</p></div>
@@ -140,7 +140,7 @@ function updateRainDuration(){
   el("rainDuration").textContent=formatDuration(elapsed);
   el("rainDurationNote").textContent=rainWasDetected
     ? "RAIN DETECTED — timer running"
-    : rainElapsedMs>0 ? "Rain stopped — last event duration" : "Waiting for rain detection";
+    : "Waiting for rain detection";
 }
 function updateRainTimerFromReading(value){
   // Ignore missing readings so a brief data gap does not falsely stop the timer.
@@ -154,8 +154,9 @@ function updateRainTimerFromReading(value){
     rainStartedAt=Date.now();
     rainWasDetected=true;
   } else if(!detected && rainWasDetected){
-    rainElapsedMs+=rainStartedAt===null?0:Date.now()-rainStartedAt;
+    // End the current rain event and reset the displayed duration immediately.
     rainStartedAt=null;
+    rainElapsedMs=0;
     rainWasDetected=false;
   }
   updateRainDuration();
@@ -172,8 +173,8 @@ function createChart(id,label,color,type="line",yMin,yMax){
   });
 }
 charts.distance=createChart("distanceChart","Distance (cm)","#38bdf8");
-charts.rate=createChart("rateChart","Rate (cm/min)","#fb923c");
-charts.moisture=createChart("moistureChart","Moisture (%)","#4ade80");
+charts.rate=createChart("rateChart","Rate (cm/sec)","#fb923c");
+charts.moisture=createChart("moistureChart","Moisture (%)","#4ade80","line",0,100);
 charts.rain=createChart("rainChart","Rain detected (1 = yes)","#818cf8","bar",0,1);
 const el=id=>document.getElementById(id);
 const fmt=(v,n=2)=>v===null||v===undefined||v===""||!Number.isFinite(Number(v))?"--":Number(v).toFixed(n);
@@ -187,8 +188,8 @@ function addAlert(message,time){
 function render(d,rows=[]){
   el("distance").textContent=fmt(d.ultrasonic_distance_cm)+" cm";
   const avgRate=averageRate(d.rate_cm_s);
-  const displayedRate=avgRate===null?d.rate_cm_min:avgRate*60;
-  el("rate").textContent=fmt(displayedRate)+" cm/min";
+  const displayedRate=avgRate===null?d.rate_cm_s:avgRate;
+  el("rate").textContent=fmt(displayedRate)+" cm/sec";
   el("moisture").textContent=fmt(d.soil_moisture_percent,1)+"%";
   el("rain").textContent=d.rain_digital_output==null?"--":(Number(d.rain_digital_output)===1?"DETECTED":"NO RAIN");
   updateRainTimerFromReading(d.rain_digital_output);
@@ -204,13 +205,13 @@ function render(d,rows=[]){
   const alert=classifySmoothedAlert(avgRate,d.alert), box=el("alert");
   box.className=alert.toLowerCase();
   const labels={NORMAL:"Normal / no sustained rapid rise detected",LOW:"LOW ALERT — sustained water-level rise",HIGH:"HIGH ALERT — sustained rapid water-level rise",WAITING:"Waiting for sensor data"};
-  const rateNote=avgRate===null?"Rate unavailable":"5-reading average: "+fmt(avgRate*60)+" cm/min";
+  const rateNote=avgRate===null?"Rate unavailable":"5-reading average: "+fmt(avgRate)+" cm/sec";
   box.textContent=(labels[alert]||alert)+". "+rateNote+". Alerts change only after "+ALERT_CONFIRM_SAMPLES+" consecutive averaged readings.";
   if(alert==="LOW"||alert==="HIGH")addAlert(alert+": "+rateNote,d.received_at);
   const recent=rows.slice(-MAX);
   for(const key of Object.keys(charts))charts[key].data.labels=recent.map((r,i)=>i+1);
   charts.distance.data.datasets[0].data=recent.map(r=>r.ultrasonic_distance_cm);
-  charts.rate.data.datasets[0].data=recent.map(r=>r.rate_cm_min);
+  charts.rate.data.datasets[0].data=recent.map(r=>r.rate_cm_s ?? (r.rate_cm_min==null?null:Number(r.rate_cm_min)/60));
   charts.moisture.data.datasets[0].data=recent.map(r=>r.soil_moisture_percent);
   charts.rain.data.datasets[0].data=recent.map(r=>r.rain_digital_output==null?null:Number(r.rain_digital_output));
   Object.values(charts).forEach(c=>c.update("none"));
@@ -218,7 +219,7 @@ function render(d,rows=[]){
   rows.slice(-10).reverse().forEach(r=>{
     const tr=document.createElement("tr");
     const vals=[r.received_at||"--",r.ultrasonic_distance_cm==null?"No echo":fmt(r.ultrasonic_distance_cm)+" cm",
-      r.rate_cm_min==null?"--":fmt(r.rate_cm_min)+" cm/min",
+      r.rate_cm_s!=null?fmt(r.rate_cm_s)+" cm/sec":r.rate_cm_min==null?"--":fmt(Number(r.rate_cm_min)/60)+" cm/sec",
       r.soil_moisture_percent==null?"--":fmt(r.soil_moisture_percent,1)+"%",
       r.rain_digital_output==null?"--":Number(r.rain_digital_output)===1?"Yes":"No",
       r.buzzer_digital_status==null?"--":Number(r.buzzer_digital_status)===1?"Active":"Off"];
