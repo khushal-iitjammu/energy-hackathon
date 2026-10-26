@@ -31,7 +31,7 @@ set SERIAL_PORT=COM5
 set BAUD_RATE=9600
 set DASHBOARD_URL=https://YOUR-RENDER-URL
 set INGEST_API_KEY=YOUR_PRIVATE_SECRET
-py serial_bridge.py
+py sb.py
 ```
 Use the actual COM port and receiver baud rate. Close Arduino Serial Monitor first.
 
